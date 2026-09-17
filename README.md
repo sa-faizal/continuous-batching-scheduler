@@ -11,6 +11,8 @@ submitted GPU work is still finishing. If that request shares a block with anoth
 request, returning the block too early lets a new request reuse memory that is
 still in use. The surviving request may then read another request's context,
 receive incorrect tokens, leak a block, or decrement its reference count twice.
+Even after the reference-count bug is fixed, late work must be distinguishable
+from work targeting a newer allocation of the same physical block.
 
 This repository contains a small, deterministic model of that failure. No GPU or
 third-party package is required. The scheduler supports:
@@ -29,7 +31,7 @@ sharing.
 
 ### 1. See the failure
 
-Run the test suite. Four tests pass and one fails. Follow the failing test's three
+Run the test suite. Four tests pass and two fail. The first failure follows three
 requests:
 
 - one request creates a cached prefix;
@@ -54,13 +56,25 @@ Change the implementation so that:
 You may change request states, APIs, and internal data structures. Be prepared to
 explain the ownership rule your implementation relies on.
 
-### 3. Preserve the serving behavior
+### 3. Reject stale work after block reuse
+
+The second failing test models an ABA problem:
+
+1. Physical block `0` is allocated to one sequence.
+2. It is released and then allocated again to another sequence.
+3. Late work from the first allocation still refers to block `0`.
+
+Add an allocation generation, epoch, or equivalent identity so stale work is
+rejected instead of modifying the new owner's block. Reusing the physical block ID
+is expected; confusing two different lifetimes of that block is not.
+
+### 4. Preserve the serving behavior
 
 Keep continuous batching and prefix-cache sharing. Do not solve the problem by
 serializing all requests or by holding one global lock across scheduling,
 admission, and completion.
 
-### 4. Add one focused test
+### 5. Add one focused test
 
 Add at least one meaningful test beyond the existing regression. Good choices
 include:
@@ -73,7 +87,7 @@ include:
 The test should reproduce a deliberate sequence of scheduler steps rather than
 depend on timing or sleeps.
 
-### 5. Discuss the design
+### 6. Discuss the design
 
 Be ready to explain:
 
@@ -92,13 +106,13 @@ as optional scratch space.
 - At least one focused regression test is added.
 - Continuous batching and prefix sharing still work.
 - Cleanup happens exactly once and a live block is not reused.
+- Late work cannot mutate a newer allocation of the same physical block.
 
 ### Stretch goals
 
-If time remains, consider adding explicit runtime invariants, versioned block
-handles to reject stale completions, broader cancellation coverage, or notes in
-`DESIGN.md`. These are useful discussion topics but are not required for
-completion.
+If time remains, consider adding explicit runtime invariants, broader cancellation
+coverage, or notes in `DESIGN.md`. These are useful discussion topics but are not
+required for completion.
 
 ## Running the exercise
 
@@ -106,9 +120,9 @@ completion.
 python -m unittest discover -s tests -v
 ```
 
-The starter intentionally has one failing regression test. The other tests provide
-a behavioral baseline. A complete solution should make the entire suite pass and
-should add meaningful coverage of its own.
+The starter intentionally has two failing regression tests. The other tests
+provide a behavioral baseline. A complete solution should make the entire suite
+pass and should add meaningful coverage of its own.
 
 Start with [`mini_scheduler/scheduler.py`](mini_scheduler/scheduler.py), then inspect
 [`mini_scheduler/kv_cache.py`](mini_scheduler/kv_cache.py). The simulated GPU has a
